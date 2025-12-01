@@ -3,11 +3,13 @@ const Allocator = std.mem.Allocator;
 
 pub const c = @cImport({
     @cInclude("xcb/xcb.h");
+    @cInclude("xcb/randr.h");
+    @cInclude("xcb/shape.h");
     @cInclude("stdlib.h");
     @cInclude("stdio.h");
 });
 
-const ZineEvent = @import("event.zig").ZineEvent;
+const ZideEvent = @import("event.zig").ZideEvent;
 const Window = @import("workspace.zig").Window;
 const MapRequestEvent = @import("event.zig").MapRequestEvent;
 
@@ -83,6 +85,8 @@ pub const Connection = struct {
         std.debug.print("Window manager started successfully\n", .{});
         std.debug.print("=== WM STARTED - ENTERING EVENT LOOP ===\n", .{});
 
+        // c.xcb_randr_get_output_info(connection, output)
+
         return .{
             .allocator = allocator,
             .connection = connection,
@@ -93,7 +97,7 @@ pub const Connection = struct {
         defer c.xcb_disconnect(self.connection);
     }
 
-    pub fn processEvent(self: Self, event: [*c]c.xcb_generic_event_t, children: *std.ArrayList(*std.process.Child)) !ZineEvent {
+    pub fn processEvent(self: Self, event: [*c]c.xcb_generic_event_t, children: *std.ArrayList(*std.process.Child)) !ZideEvent {
         const response_type = event.*.response_type & ~@as(u8, 0x80);
 
         // Event type 0 means it's an error
@@ -112,6 +116,7 @@ pub const Connection = struct {
         // Handle events
         switch (response_type) {
             c.XCB_MAP_REQUEST => return self.mapRequest(@ptrCast(event)),
+            c.XCB_ENTER_NOTIFY => return self.enterNotify(@ptrCast(event)),
             c.XCB_BUTTON_PRESS => {
                 std.debug.print("Button press event\n", .{});
             },
@@ -142,19 +147,14 @@ pub const Connection = struct {
                 // const window =
                 // c.xcb_set_input_focus(connection, 1, window, 0);
             },
-            c.XCB_ENTER_NOTIFY => {
-                const notify_event: [*c]c.xcb_enter_notify_event_t = @ptrCast(event);
-                const window = notify_event.*.event;
-                _ = c.xcb_set_input_focus(self.connection, c.XCB_INPUT_FOCUS_POINTER_ROOT, window, c.XCB_CURRENT_TIME);
-                std.debug.print("enter_notify event={} root={}\n", .{ notify_event.*.event, notify_event.*.root });
-            },
+
             else => {},
         }
 
         return .none;
     }
 
-    pub fn mapRequest(self: Self, event: [*c]c.xcb_map_request_event_t) ZineEvent {
+    pub fn mapRequest(self: Self, event: [*c]c.xcb_map_request_event_t) ZideEvent {
         if (event == null) {
             std.debug.print("map_request: event null\n", .{});
             return .none;
@@ -228,7 +228,19 @@ pub const Connection = struct {
         // TODO: Needed?
         _ = c.xcb_flush(self.connection);
 
-        return ZineEvent{ .map_request = MapRequestEvent{ .window = window, .kind = 0 } };
+        return ZideEvent{ .map_request = MapRequestEvent{ .window = window, .kind = 0 } };
+    }
+
+    fn enterNotify(self: Self, event: [*c]c.xcb_enter_notify_event_t) ZideEvent {
+        if (event == null) {
+            return .none;
+        }
+        const window = event.*.event;
+        const root = event.*.root;
+        _ = c.xcb_set_input_focus(self.connection, c.XCB_INPUT_FOCUS_POINTER_ROOT, window, c.XCB_CURRENT_TIME);
+        std.debug.print("enter_notify event={} root={}\n", .{ window, root });
+
+        return .{ .enter_notify = window };
     }
 
     pub fn update(self: Self, windows: std.ArrayList(Window)) void {

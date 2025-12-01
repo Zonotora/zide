@@ -38,6 +38,9 @@ pub fn main() !void {
             .map_request => |e| {
                 try workspace.add(e);
             },
+            .enter_notify => |w| {
+                workspace.setFocus(w);
+            },
             .toggle => {
                 workspace.toggle();
             },

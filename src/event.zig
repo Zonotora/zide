@@ -3,9 +3,10 @@ pub const MapRequestEvent = struct {
     kind: u8,
 };
 
-pub const ZineEvent = union(enum) {
+pub const ZideEvent = union(enum) {
     none,
     quit,
     toggle,
     map_request: MapRequestEvent,
+    enter_notify: u32,
 };
