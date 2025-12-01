@@ -36,7 +36,10 @@ pub fn main() !void {
             .none => {},
             .quit => is_running = false,
             .map_request => |e| {
-                workspace.add(e);
+                try workspace.add(e);
+            },
+            .toggle => {
+                workspace.toggle();
             },
             // else => {}
         }

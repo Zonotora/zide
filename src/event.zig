@@ -6,5 +6,6 @@ pub const MapRequestEvent = struct {
 pub const ZineEvent = union(enum) {
     none,
     quit,
+    toggle,
     map_request: MapRequestEvent,
 };

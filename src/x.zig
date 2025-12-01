@@ -74,9 +74,11 @@ pub const Connection = struct {
 
         // 24 | q
         // 38 | a
-        _ = c.xcb_grab_key(connection, 1, root, c.XCB_MOD_MASK_ANY, 24, c.XCB_GRAB_MODE_ASYNC, c.XCB_GRAB_MODE_ASYNC);
+        _ = c.xcb_grab_key(connection, 1, root, c.XCB_MOD_MASK_CONTROL, 24, c.XCB_GRAB_MODE_ASYNC, c.XCB_GRAB_MODE_ASYNC);
         // const mod_key =
-        _ = c.xcb_grab_key(connection, 1, root, c.XCB_MOD_MASK_ANY, 38, c.XCB_GRAB_MODE_ASYNC, c.XCB_GRAB_MODE_ASYNC);
+        _ = c.xcb_grab_key(connection, 1, root, c.XCB_MOD_MASK_CONTROL, 38, c.XCB_GRAB_MODE_ASYNC, c.XCB_GRAB_MODE_ASYNC);
+        _ = c.xcb_grab_key(connection, 1, root, c.XCB_MOD_MASK_CONTROL, 39, c.XCB_GRAB_MODE_ASYNC, c.XCB_GRAB_MODE_ASYNC);
+        _ = c.xcb_grab_key(connection, 1, root, c.XCB_MOD_MASK_CONTROL, 40, c.XCB_GRAB_MODE_ASYNC, c.XCB_GRAB_MODE_ASYNC);
 
         std.debug.print("Window manager started successfully\n", .{});
         std.debug.print("=== WM STARTED - ENTERING EVENT LOOP ===\n", .{});
@@ -102,7 +104,7 @@ pub const Connection = struct {
                 error_event.*.major_code,
                 error_event.*.minor_code,
             });
-            return .none;
+            return .quit;
         }
 
         std.debug.print("event {}\n", .{response_type});
@@ -127,6 +129,8 @@ pub const Connection = struct {
                     // defer child.dein
                     try child.spawn();
                     try children.append(self.allocator, &child);
+                } else if (key == 39) {
+                    return .toggle;
                 }
 
                 // if (key_event.*.detail == 0) {
@@ -185,7 +189,7 @@ pub const Connection = struct {
         // TODO: _ =
         // _ = c.xcb_grab_server(self.connection);
 
-        const color_mask = [_]u32{0xFF00FF};
+        const color_mask = [_]u32{0xFFFFFF};
         _ = c.xcb_change_window_attributes(
             self.connection,
             window,
@@ -193,7 +197,7 @@ pub const Connection = struct {
             &color_mask,
         );
 
-        _ = c.xcb_configure_window(self.connection, window, c.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{10});
+        _ = c.xcb_configure_window(self.connection, window, c.XCB_CONFIG_WINDOW_BORDER_WIDTH, &[_]u32{1});
 
         const configure_mask = c.XCB_CONFIG_WINDOW_X |
             c.XCB_CONFIG_WINDOW_Y |
@@ -234,7 +238,8 @@ pub const Connection = struct {
                 c.XCB_CONFIG_WINDOW_WIDTH |
                 c.XCB_CONFIG_WINDOW_HEIGHT;
 
-            const values = [_]u32{ window.x, window.y, window.width, window.height };
+            const rect = window.rect;
+            const values = [_]u32{ rect.x, rect.y, rect.width, rect.height };
 
             _ = c.xcb_configure_window(self.connection, window.window, configure_mask, &values);
         }
