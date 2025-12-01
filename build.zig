@@ -87,6 +87,45 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("xcb");
     exe.linkLibC();
 
+    const bar_exe = b.addExecutable(.{
+        .name = "zide-bar",
+        .root_module = b.createModule(.{
+            // b.createModule defines a new module just like b.addModule but,
+            // unlike b.addModule, it does not expose the module to consumers of
+            // this package, which is why in this case we don't have to give it a name.
+            .root_source_file = b.path("src/bar.zig"),
+            // Target and optimization levels must be explicitly wired in when
+            // defining an executable or library (in the root module), and you
+            // can also hardcode a specific target for an executable or library
+            // definition if desireable (e.g. firmware for embedded devices).
+            .target = target,
+            .optimize = optimize,
+            // List of modules available for import in source files part of the
+            // root module.
+            .imports = &.{
+                // Here "zide" is the name you will use in your source code to
+                // import this module (e.g. `@import("zide")`). The name is
+                // repeated because you are allowed to rename your imports, which
+                // can be extremely useful in case of collisions (which can happen
+                // importing modules from different packages).
+                // .{ .name = "zide", .module = mod },
+            },
+        }),
+    });
+
+    bar_exe.linkSystemLibrary("xcb");
+    bar_exe.linkSystemLibrary("xcb-shape");
+    bar_exe.linkLibC();
+
+    b.installArtifact(bar_exe);
+    const bar_run_step = b.step("bar", "Run zide-bar");
+    const bar_run_cmd = b.addRunArtifact(bar_exe);
+    bar_run_step.dependOn(&bar_run_cmd.step);
+    bar_run_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        bar_run_cmd.addArgs(args);
+    }
+
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
