@@ -37,9 +37,11 @@ pub fn main() !void {
             .quit => is_running = false,
             .map_request => |e| {
                 try workspace.add(e);
+                conn.focus(e.window);
             },
             .unmap_notify, .unmap_request => |w| {
-                try workspace.remove(w);
+                // TODO: Performance?
+                _ = workspace.remove(w);
             },
             .enter_notify => |w| {
                 workspace.setFocus(w);
@@ -51,7 +53,11 @@ pub fn main() !void {
                     .toggle => {
                         workspace.toggle();
                     },
-                    .close_window => {},
+                    .close_window => {
+                        if (workspace.removeFocused()) |w| {
+                            conn.destroy(w);
+                        }
+                    },
                     .add_terminal => {
                         const args = .{"alacritty"};
                         var child = std.process.Child.init(&args, allocator);
@@ -63,8 +69,6 @@ pub fn main() !void {
             },
             // else => {}
         }
-
-        workspace.update();
 
         conn.update(workspace.windows);
     }

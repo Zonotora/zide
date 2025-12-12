@@ -19,13 +19,15 @@ pub const Window = struct {
     window: u32,
     kind: u8,
     rect: Rect,
-    tree: *Tree,
     orientation_hint: Orientation = .horizontal,
 };
 
-const Node = union(enum) {
-    window: *Window,
-    tree: Tree,
+const Node = struct {
+    parent: ?*Node,
+    value: union(enum) {
+        window: *Window,
+        tree: Tree,
+    },
 };
 
 pub const Tree = struct {
@@ -114,8 +116,20 @@ pub const Tree = struct {
     }
 
     pub fn remove(self: *Self, target: u32) ?u32 {
+        // const tree = w.tree;
+        // remove_focus = tree.remove(window);
+        // const is_top_tree = &self.tree == tree;
+        // // Remove tree
+        // if (!is_top_tree and tree.nodes.items.len == 0) {}
+        // // Remove tree and replace with node
+        // else if (!is_top_tree and tree.nodes.items.len == 1) {}
+
         if (self.findWindowIndex(target)) |index| {
+            // Remove node
             _ = self.nodes.swapRemove(index);
+
+            // If there are no nodes left in the tree, remove the tree
+
             return @intCast(index);
         }
         return null;
@@ -155,7 +169,7 @@ pub const Tree = struct {
 
 pub const Workspace = struct {
     allocator: Allocator,
-    tree: Tree,
+    root_tree: Node,
     windows: std.ArrayList(Window),
     // floating_windows: std.ArrayList(Window),
     rect: Rect,
@@ -166,7 +180,10 @@ pub const Workspace = struct {
     pub fn init(allocator: Allocator) !Self {
         return .{
             .allocator = allocator,
-            .tree = try Tree.init(allocator),
+            .root_tree = Node{ .parent = null, .value = .{
+                .tree = try Tree.init(allocator),
+            } },
+
             .windows = try std.ArrayList(Window).initCapacity(allocator, 10),
             .rect = .{},
             .focus = null,
@@ -180,18 +197,21 @@ pub const Workspace = struct {
 
     pub fn add(self: *Self, event: MapRequestEvent) !void {
         if (self.focus == null) {
-            const window = Window{ .tree = &self.tree, .window = event.window, .kind = event.kind, .rect = .{} };
+            const window = Window{ .window = event.window, .kind = event.kind, .rect = .{} };
             // TODO: error union
             self.windows.append(self.allocator, window) catch {};
             const last = self.windows.items.len - 1;
-            self.tree.insert(null, Node{ .window = &self.windows.items[last] });
+
+            self.root_tree.value.tree.insert(null, Node{ .parent = &self.root_tree, .value = .{ .window = &self.windows.items[last] } });
+
             std.debug.print("window={}", .{window});
 
             self.focus = &self.windows.items[last];
         } else {
-            const tree = self.focus.?.tree;
-            tree.print(.{});
-            std.debug.print("focus={}\n", .{self.focus.?.window});
+            const parent = self.focus.?.;
+            const tree = parent.value.tree;
+            // const tree = self.focus.?.tree;
+            // std.debug.print("focus={}\n", .{self.focus.?.window});
 
             const window = Window{ .tree = tree, .window = event.window, .kind = event.kind, .rect = .{}, .orientation_hint = tree.orientation };
             // TODO: error union
@@ -201,8 +221,11 @@ pub const Workspace = struct {
             // Insert new tree node
             if (self.focus.?.orientation_hint != tree.orientation) {
                 var orth_tree = try Tree.init(self.allocator);
+                const parent_node = Node{ .parent = parent, .value = .{ .tree = orth_tree } };
+
                 orth_tree.orientation = self.focus.?.orientation_hint;
-                orth_tree.insertWithIndex(0, Node{ .window = self.focus.? });
+                orth_tree.insertWithIndex(0, Node{ .parent = parent_node, .value = .{ .window = self.focus.? } });
+
                 const prev_focus = tree.remove(self.focus.?.window);
                 orth_tree.insertWithIndex(1, Node{ .window = &self.windows.items[last] });
                 // TODO: What if prev_focus is null?
@@ -239,6 +262,34 @@ pub const Workspace = struct {
         std.debug.print("workspace_add event={}\n", .{event});
     }
 
+    pub fn removeFocused(self: *Self) ?u32 {
+        if (self.focus) |focus| {
+            return self.remove(focus.window);
+        }
+        return null;
+    }
+
+    // TODO: Function signature
+    pub fn remove(self: *Self, window: u32) ?u32 {
+        std.debug.print("remove window={}\n", .{window});
+        var remove_focus: ?u32 = null;
+        var remove_index: ?usize = null;
+        for (self.windows.items, 0..) |w, index| {
+            if (w.window == window) {
+                remove_index = index;
+
+                remove_focus = w.tree.remove(w);
+
+                break;
+            }
+        }
+        if (remove_index) |index| {
+            _ = self.windows.swapRemove(index);
+        }
+
+        return remove_focus;
+    }
+
     pub fn toggle(self: *Self) void {
         if (self.focus == null) {
             return;
@@ -257,30 +308,5 @@ pub const Workspace = struct {
                 break;
             }
         }
-    }
-
-    pub fn update(self: Self) void {
-        _ = self;
-        // if (self.windows.items.len == 0) {
-        //     return;
-        // }
-        // for (self.windows.items, 0..) |*window, index| {
-        //     const parent = window.container.rect;
-        //     const n_windows = @max(window.container.n_windows, 1);
-
-        //     switch (window.container.orientation) {
-        //         .horizontal => {
-        //             const size = parent.width / n_windows;
-        //             window.x = parent.x + size;
-        //             window.y = parent.y;
-        //             window.width = @intCast();
-        //             window.height = parent.height;
-        //         },
-        //         .vertical => {
-        //             window.x = parent.x + 0;
-        //             window.width = @intCast(window_width);
-        //         },
-        //     }
-        // }
     }
 };
