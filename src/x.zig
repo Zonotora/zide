@@ -10,12 +10,16 @@ pub const c = @cImport({
 });
 
 const ZideEvent = @import("event.zig").ZideEvent;
+const Action = @import("event.zig").Action;
+const RawKeyBinding = @import("event.zig").RawKeyBinding;
+const KeyBinding = @import("event.zig").KeyBinding;
 const Window = @import("workspace.zig").Window;
 const MapRequestEvent = @import("event.zig").MapRequestEvent;
 
 pub const Connection = struct {
     allocator: Allocator,
     connection: ?*c.xcb_connection_t,
+    key_bindings: std.AutoArrayHashMap(KeyBinding, Action),
 
     const Self = @This();
 
@@ -72,24 +76,16 @@ pub const Connection = struct {
             c.XCB_MOD_MASK_ANY, // modifiers (any modifier keys)
         );
 
-        _ = c.xcb_get_keyboard_mapping(connection, setup.*.min_keycode, setup.*.max_keycode - setup.*.min_keycode + 1);
-
-        // 24 | q
-        // 38 | a
-        _ = c.xcb_grab_key(connection, 1, root, c.XCB_MOD_MASK_CONTROL, 24, c.XCB_GRAB_MODE_ASYNC, c.XCB_GRAB_MODE_ASYNC);
-        // const mod_key =
-        _ = c.xcb_grab_key(connection, 1, root, c.XCB_MOD_MASK_CONTROL, 38, c.XCB_GRAB_MODE_ASYNC, c.XCB_GRAB_MODE_ASYNC);
-        _ = c.xcb_grab_key(connection, 1, root, c.XCB_MOD_MASK_CONTROL, 39, c.XCB_GRAB_MODE_ASYNC, c.XCB_GRAB_MODE_ASYNC);
-        _ = c.xcb_grab_key(connection, 1, root, c.XCB_MOD_MASK_CONTROL, 40, c.XCB_GRAB_MODE_ASYNC, c.XCB_GRAB_MODE_ASYNC);
+        const key_bindings = try setupKeyboard(connection, allocator, setup, root);
 
         std.debug.print("Window manager started successfully\n", .{});
-        std.debug.print("=== WM STARTED - ENTERING EVENT LOOP ===\n", .{});
 
         // c.xcb_randr_get_output_info(connection, output)
 
         return .{
             .allocator = allocator,
             .connection = connection,
+            .key_bindings = key_bindings,
         };
     }
 
@@ -97,7 +93,85 @@ pub const Connection = struct {
         defer c.xcb_disconnect(self.connection);
     }
 
-    pub fn processEvent(self: Self, event: [*c]c.xcb_generic_event_t, children: *std.ArrayList(*std.process.Child)) !ZideEvent {
+    fn setupKeyboard(connection: ?*c.xcb_connection_t, allocator: Allocator, setup: [*c]const c.xcb_setup_t, root: u32) !std.AutoArrayHashMap(KeyBinding, Action) {
+        var raw_key_bindings = std.AutoArrayHashMap(RawKeyBinding, Action).init(allocator);
+
+        const mod_key = c.XCB_MOD_MASK_CONTROL;
+        try raw_key_bindings.put(.{ .keysym = 'A', .mods = mod_key }, .add_terminal);
+        try raw_key_bindings.put(.{ .keysym = 'Q', .mods = mod_key }, .quit);
+        try raw_key_bindings.put(.{ .keysym = 'S', .mods = mod_key }, .toggle);
+
+        var key_bindings = std.AutoArrayHashMap(KeyBinding, Action).init(allocator);
+
+        const min_keycode = setup.*.min_keycode;
+        const max_keycode = setup.*.max_keycode;
+
+        const cookie = c.xcb_get_keyboard_mapping(connection, min_keycode, max_keycode - min_keycode + 1);
+        // TODO: Free
+        const reply = c.xcb_get_keyboard_mapping_reply(connection, cookie, null);
+        if (reply != null) {
+            const keysyms_per_keycode = reply.*.keysyms_per_keycode;
+            const n_keycodes = reply.*.length / keysyms_per_keycode;
+            const n_keysyms = reply.*.length;
+            // TODO: Array size
+            const keysyms: *[4096]c.xcb_keysym_t = @ptrCast(reply + 1);
+
+            std.debug.print("n_keycodes={} n_keysyms={} per_keycode={}\n", .{ n_keycodes, n_keysyms, keysyms_per_keycode });
+
+            // for (0..n_keycodes) |keycode_idx| {
+            //     std.debug.print("keycode={} ", .{min_keycode + keycode_idx});
+            //     for (0..keysyms_per_keycode) |keysym_idx| {
+            //         std.debug.print(" {x}", .{keysyms[keycode_idx * keysyms_per_keycode + keysym_idx]});
+            //     }
+            //     std.debug.print("\n", .{});
+            // }
+
+            var it = raw_key_bindings.iterator();
+
+            while (it.next()) |key_binding| {
+                const target_keysym = key_binding.key_ptr.keysym;
+                const mods = key_binding.key_ptr.mods;
+                const action = key_binding.value_ptr.*;
+
+                // TODO: Inefficient
+                var index: u32 = 0;
+                for (keysyms, 0..) |keysym, i| {
+                    if (keysym == target_keysym) {
+                        index = @intCast(i);
+                        break;
+                    }
+                }
+
+                const keycode: u8 = @as(u8, @intCast(index / keysyms_per_keycode)) + min_keycode;
+                const owner_events = 1;
+
+                // Grab the key combination with and without the LOCK and MOD2 (NUMLOCK) keys as they may be active and interfere with the key combinations.
+                const all_mods = [_]c_int{ mods, mods | c.XCB_MOD_MASK_LOCK, mods | c.XCB_MOD_MASK_2, mods | c.XCB_MOD_MASK_LOCK | c.XCB_MOD_MASK_2 };
+
+                for (all_mods) |target_mods| {
+                    _ = c.xcb_grab_key(
+                        connection,
+                        owner_events,
+                        root,
+                        @intCast(target_mods),
+                        keycode,
+                        c.XCB_GRAB_MODE_ASYNC,
+                        c.XCB_GRAB_MODE_ASYNC,
+                    );
+                }
+
+                // TODO: Print statement
+                std.debug.print("Grabbing keycode={}\n", .{keycode});
+
+                try key_bindings.put(.{ .keycode = keycode, .mods = mods }, action);
+            }
+        }
+
+        raw_key_bindings.deinit();
+        return key_bindings;
+    }
+
+    pub fn processEvent(self: Self, event: [*c]c.xcb_generic_event_t) !ZideEvent {
         const response_type = event.*.response_type & ~@as(u8, 0x80);
 
         // Event type 0 means it's an error
@@ -120,28 +194,7 @@ pub const Connection = struct {
             c.XCB_BUTTON_PRESS => {
                 std.debug.print("Button press event\n", .{});
             },
-            c.XCB_KEY_PRESS => {
-                const key_event: [*c]c.xcb_key_press_event_t = @ptrCast(event);
-                std.debug.print("Key press event: {}\n", .{key_event.*.detail});
-                const key = key_event.*.detail;
-                // c.xcb_get_keyboard_mapping(c: ?*struct_xcb_connection_t, first_keycode: u8, count: u8)
-                // is_running = false;
-                if (key == 24) {
-                    return .quit;
-                } else if (key == 38) {
-                    const args = .{"alacritty"};
-                    var child = std.process.Child.init(&args, self.allocator);
-                    // defer child.dein
-                    try child.spawn();
-                    try children.append(self.allocator, &child);
-                } else if (key == 39) {
-                    return .toggle;
-                }
-
-                // if (key_event.*.detail == 0) {
-
-                // }
-            },
+            c.XCB_KEY_PRESS => return self.keyPress(@ptrCast(event)),
             c.XCB_MOTION_NOTIFY => {
 
                 // const window =
@@ -241,6 +294,23 @@ pub const Connection = struct {
         std.debug.print("enter_notify event={} root={}\n", .{ window, root });
 
         return .{ .enter_notify = window };
+    }
+
+    fn keyPress(self: Self, event: [*c]c.xcb_key_press_event_t) ZideEvent {
+        if (event == null) {
+            return .none;
+        }
+        const keycode = event.*.detail;
+        // Clear CAPSLOCK and NUMLOCK from mods
+        const mask = ~(c.XCB_MOD_MASK_2 | c.XCB_MOD_MASK_LOCK);
+        const mods: u16 = @intCast(event.*.state & mask);
+        const action = self.key_bindings.get(.{ .keycode = keycode, .mods = mods });
+
+        if (action == null) {
+            return .{ .key_press = .none };
+        }
+
+        return .{ .key_press = action.? };
     }
 
     pub fn update(self: Self, windows: std.ArrayList(Window)) void {

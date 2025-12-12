@@ -32,17 +32,34 @@ pub fn main() !void {
         }
         defer c.free(event);
 
-        switch (try conn.processEvent(event, &children)) {
+        switch (try conn.processEvent(event)) {
             .none => {},
             .quit => is_running = false,
             .map_request => |e| {
                 try workspace.add(e);
             },
+            .unmap_notify, .unmap_request => |w| {
+                try workspace.remove(w);
+            },
             .enter_notify => |w| {
                 workspace.setFocus(w);
             },
-            .toggle => {
-                workspace.toggle();
+            .key_press => |action| {
+                switch (action) {
+                    .none => {},
+                    .quit => is_running = false,
+                    .toggle => {
+                        workspace.toggle();
+                    },
+                    .close_window => {},
+                    .add_terminal => {
+                        const args = .{"alacritty"};
+                        var child = std.process.Child.init(&args, allocator);
+                        // defer child.dein
+                        try child.spawn();
+                        try children.append(allocator, &child);
+                    },
+                }
             },
             // else => {}
         }
