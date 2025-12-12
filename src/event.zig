@@ -3,6 +3,14 @@ pub const MapRequestEvent = struct {
     kind: u8,
 };
 
+pub const ButtonEvent = struct {
+    window: u32,
+    x: i16,
+    y: i16,
+    root_x: i16,
+    root_y: i16,
+};
+
 pub const ZideEvent = union(enum) {
     none,
     quit,
@@ -11,6 +19,9 @@ pub const ZideEvent = union(enum) {
     unmap_notify: u32,
     enter_notify: u32,
     key_press: Action,
+    button_press: ButtonEvent,
+    button_release: ButtonEvent,
+    button_motion: ButtonEvent,
 };
 
 pub const Action = enum {

@@ -37,21 +37,24 @@ pub fn main() !void {
             .quit => is_running = false,
             .map_request => |e| {
                 try workspace.add(e);
+                conn.focus(e.window);
             },
             .unmap_notify, .unmap_request => |w| {
-                try workspace.remove(w);
-            },
-            .enter_notify => |w| {
-                workspace.setFocus(w);
+                // TODO: Performance?
+                _ = workspace.remove(w);
             },
             .key_press => |action| {
                 switch (action) {
                     .none => {},
                     .quit => is_running = false,
                     .toggle => {
-                        workspace.toggle();
+                        // workspace.toggle();
                     },
-                    .close_window => {},
+                    .close_window => {
+                        // if (workspace.removeFocused()) |w| {
+                        //     conn.destroy(w);
+                        // }
+                    },
                     .add_terminal => {
                         const args = .{"alacritty"};
                         var child = std.process.Child.init(&args, allocator);
@@ -61,10 +64,34 @@ pub fn main() !void {
                     },
                 }
             },
+            .enter_notify => |w| {
+                workspace.setFocus(w);
+            },
+            .button_press => |button| {
+                workspace.setMovable(
+                    button.window,
+                    button.x,
+                    button.y,
+                    true,
+                );
+            },
+            .button_release => |button| {
+                workspace.setMovable(
+                    button.window,
+                    button.x,
+                    button.y,
+                    false,
+                );
+            },
+            .button_motion => |button| {
+                workspace.moveWindow(
+                    button.window,
+                    button.root_x,
+                    button.root_y,
+                );
+            },
             // else => {}
         }
-
-        workspace.update();
 
         conn.update(workspace.windows);
     }

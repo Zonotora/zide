@@ -20,6 +20,7 @@ pub const Connection = struct {
     allocator: Allocator,
     connection: ?*c.xcb_connection_t,
     key_bindings: std.AutoArrayHashMap(KeyBinding, Action),
+    root: u32,
 
     const Self = @This();
 
@@ -63,18 +64,18 @@ pub const Connection = struct {
             std.debug.print("Another window manager may already be running.\n", .{});
             return error.WindowManagerAlreadyRunning;
         }
-        _ = c.xcb_grab_button(
-            connection,
-            0, // owner_events = false (we get the events)
-            root,
-            c.XCB_EVENT_MASK_BUTTON_PRESS | c.XCB_EVENT_MASK_BUTTON_RELEASE,
-            c.XCB_GRAB_MODE_ASYNC, // pointer_mode
-            c.XCB_GRAB_MODE_ASYNC, // keyboard_mode
-            c.XCB_NONE, // confine_to
-            c.XCB_NONE, // cursor
-            c.XCB_BUTTON_INDEX_ANY, // button
-            c.XCB_MOD_MASK_ANY, // modifiers (any modifier keys)
-        );
+        // _ = c.xcb_grab_button(
+        //     connection,
+        //     0, // owner_events = false (we get the events)
+        //     root,
+        //     c.XCB_EVENT_MASK_BUTTON_PRESS | c.XCB_EVENT_MASK_BUTTON_RELEASE,
+        //     c.XCB_GRAB_MODE_ASYNC, // pointer_mode
+        //     c.XCB_GRAB_MODE_ASYNC, // keyboard_mode
+        //     c.XCB_NONE, // confine_to
+        //     c.XCB_NONE, // cursor
+        //     c.XCB_BUTTON_INDEX_ANY, // button
+        //     c.XCB_MOD_MASK_ANY, // modifiers (any modifier keys)
+        // );
 
         const key_bindings = try setupKeyboard(connection, allocator, setup, root);
 
@@ -86,6 +87,7 @@ pub const Connection = struct {
             .allocator = allocator,
             .connection = connection,
             .key_bindings = key_bindings,
+            .root = root,
         };
     }
 
@@ -98,7 +100,8 @@ pub const Connection = struct {
 
         const mod_key = c.XCB_MOD_MASK_CONTROL;
         try raw_key_bindings.put(.{ .keysym = 'A', .mods = mod_key }, .add_terminal);
-        try raw_key_bindings.put(.{ .keysym = 'Q', .mods = mod_key }, .quit);
+        try raw_key_bindings.put(.{ .keysym = 'Q', .mods = mod_key }, .close_window);
+        try raw_key_bindings.put(.{ .keysym = 'Q', .mods = mod_key | c.XCB_MOD_MASK_SHIFT }, .quit);
         try raw_key_bindings.put(.{ .keysym = 'S', .mods = mod_key }, .toggle);
 
         var key_bindings = std.AutoArrayHashMap(KeyBinding, Action).init(allocator);
@@ -190,15 +193,16 @@ pub const Connection = struct {
         // Handle events
         switch (response_type) {
             c.XCB_MAP_REQUEST => return self.mapRequest(@ptrCast(event)),
-            c.XCB_ENTER_NOTIFY => return self.enterNotify(@ptrCast(event)),
-            c.XCB_BUTTON_PRESS => {
-                std.debug.print("Button press event\n", .{});
-            },
+            c.XCB_UNMAP_WINDOW => return self.unmapRequest(@ptrCast(event)),
+            c.XCB_UNMAP_NOTIFY => return self.unmapNotify(@ptrCast(event)),
             c.XCB_KEY_PRESS => return self.keyPress(@ptrCast(event)),
-            c.XCB_MOTION_NOTIFY => {
-
-                // const window =
-                // c.xcb_set_input_focus(connection, 1, window, 0);
+            c.XCB_ENTER_NOTIFY => return self.enterNotify(@ptrCast(event)),
+            c.XCB_BUTTON_PRESS => return self.buttonPress(@ptrCast(event)),
+            c.XCB_BUTTON_RELEASE => return self.buttonRelease(@ptrCast(event)),
+            c.XCB_MOTION_NOTIFY => return self.motionNotify(@ptrCast(event)),
+            c.XCB_RESIZE_REQUEST => {
+                const e: *c.xcb_resize_request_event_t = @ptrCast(event);
+                std.debug.print("resize_request window={} width={} height={}", .{ e.window, e.width, e.height });
             },
 
             else => {},
@@ -230,6 +234,30 @@ pub const Connection = struct {
             c.XCB_CW_EVENT_MASK,
             &event_mask,
         );
+
+        // Grab mod + button to allow for movement
+        // Any - Any of the following (or none):
+        // 1 - The left mouse button.
+        // 2 - The right mouse button.
+        // 3 - The middle mouse button.
+        // 4 - Scroll wheel. TODO: direction?
+        // 5 - Scroll wheel. TODO: direction?
+        const grab_button_event_mask = c.XCB_EVENT_MASK_BUTTON_PRESS | c.XCB_EVENT_MASK_BUTTON_MOTION | c.XCB_EVENT_MASK_BUTTON_RELEASE;
+        const mods = [_]u16{ c.XCB_MOD_MASK_CONTROL, c.XCB_MOD_MASK_CONTROL | c.XCB_MOD_MASK_SHIFT };
+        for (mods) |mask| {
+            _ = c.xcb_grab_button(
+                self.connection,
+                0,
+                window,
+                grab_button_event_mask,
+                c.XCB_GRAB_MODE_ASYNC,
+                c.XCB_GRAB_MODE_ASYNC,
+                self.root,
+                0,
+                c.XCB_BUTTON_INDEX_1,
+                mask,
+            );
+        }
 
         const cookie = c.xcb_get_geometry(self.connection, window);
         // TODO: null
@@ -296,6 +324,94 @@ pub const Connection = struct {
         return .{ .enter_notify = window };
     }
 
+    fn buttonPress(_: Self, event: [*c]c.xcb_button_press_event_t) ZideEvent {
+        if (event == null) {
+            return .none;
+        }
+
+        const window = event.*.event;
+        const x = event.*.event_x;
+        const y = event.*.event_y;
+        const root_x = event.*.root_x;
+        const root_y = event.*.root_y;
+
+        std.debug.print("button_press window={} x={} y={} root_x={} root_y={}\n", .{
+            window,
+            x,
+            y,
+            root_x,
+            root_y,
+        });
+
+        return .{ .button_press = .{ .window = window, .x = x, .y = y, .root_x = root_x, .root_y = root_y } };
+    }
+
+    fn buttonRelease(_: Self, event: [*c]c.xcb_button_release_event_t) ZideEvent {
+        if (event == null) {
+            return .none;
+        }
+
+        const window = event.*.event;
+        const x = event.*.event_x;
+        const y = event.*.event_y;
+        const root_x = event.*.root_x;
+        const root_y = event.*.root_y;
+
+        std.debug.print("button_press window={} x={} y={} root_x={} root_y={}\n", .{
+            window,
+            x,
+            y,
+            root_x,
+            root_y,
+        });
+
+        return .{ .button_release = .{ .window = window, .x = x, .y = y, .root_x = root_x, .root_y = root_y } };
+    }
+
+    fn motionNotify(_: Self, event: [*c]c.xcb_motion_notify_event_t) ZideEvent {
+        if (event == null) {
+            return .none;
+        }
+
+        const mods = event.*.state;
+        const window = event.*.event;
+        const x = event.*.event_x;
+        const y = event.*.event_y;
+        const root_x = event.*.root_x;
+        const root_y = event.*.root_y;
+        // Resize
+        if (mods & c.XCB_MOD_MASK_SHIFT != 0) {
+            // TODO: Return resize event
+            return .none;
+        }
+
+        std.debug.print("button_press window={} x={} y={} root_x={} root_y={}\n", .{
+            window,
+            x,
+            y,
+            root_x,
+            root_y,
+        });
+
+        return .{ .button_motion = .{ .window = window, .x = x, .y = y, .root_x = root_x, .root_y = root_y } };
+    }
+
+    fn unmapRequest(_: Self, event: [*c]c.xcb_unmap_window_request_t) ZideEvent {
+        if (event == null) {
+            return .none;
+        }
+
+        return .{ .unmap_request = event.*.window };
+    }
+
+    fn unmapNotify(_: Self, event: [*c]c.xcb_unmap_notify_event_t) ZideEvent {
+        if (event == null) {
+            return .none;
+        }
+
+        return .{ .unmap_notify = event.*.window };
+    }
+
     fn keyPress(self: Self, event: [*c]c.xcb_key_press_event_t) ZideEvent {
         if (event == null) {
             return .none;
@@ -314,16 +430,136 @@ pub const Connection = struct {
     }
 
     pub fn update(self: Self, windows: std.ArrayList(Window)) void {
-        for (windows.items) |window| {
+        for (windows.items, 0..) |window, index| {
             const configure_mask = c.XCB_CONFIG_WINDOW_X |
                 c.XCB_CONFIG_WINDOW_Y |
                 c.XCB_CONFIG_WINDOW_WIDTH |
                 c.XCB_CONFIG_WINDOW_HEIGHT;
 
-            const rect = window.rect;
-            const values = [_]u32{ rect.x, rect.y, rect.width, rect.height };
+            // TODO: Remove
+            var rect = window.rect;
+            if (window.floating) {
+                rect.x += @intCast(rect.width * @as(u32, @intCast(index)));
+            }
+
+            const values = [_]i32{ rect.x, rect.y, rect.width, rect.height };
 
             _ = c.xcb_configure_window(self.connection, window.window, configure_mask, &values);
+        }
+    }
+
+    pub fn focus(self: Self, window: u32) void {
+        // TODO: Handle void cookie
+        const cookie = c.xcb_set_input_focus(self.connection, 1, window, c.XCB_CURRENT_TIME);
+        _ = cookie;
+    }
+
+    fn requestAtom(self: Self, name: [*c]const u8) ?u32 {
+        const name_len: u16 = @intCast(std.mem.len(name));
+        const cookie = c.xcb_intern_atom(self.connection, 0, name_len, name);
+
+        const reply = c.xcb_intern_atom_reply(self.connection, cookie, null);
+        if (reply != null) {
+            return reply.*.atom;
+        }
+
+        return null;
+    }
+
+    fn getProperty(self: Self, window: u32, property: u32, kind: u32) [*c]c.xcb_get_property_reply_t {
+        var cookie = c.xcb_get_property(self.connection, 0, window, property, kind, 0, 0);
+        const reply = c.xcb_get_property_reply(self.connection, cookie, null);
+
+        // TODO: Not sure what this is all about
+        const extra = @min(reply.*.bytes_after % 4, 1);
+        const long_length = reply.*.bytes_after / 4 + extra;
+
+        cookie = c.xcb_get_property(self.connection, 0, window, property, kind, 0, long_length);
+
+        return c.xcb_get_property_reply(self.connection, cookie, null);
+    }
+
+    fn serialize32(value: u32, endianLittle: bool) [4]u8 {
+        if (endianLittle == 0) {
+            return .{
+                value & 0xFF,
+                (value >> 8) & 0xFF,
+                (value >> 16) & 0xFF,
+                (value >> 24) & 0xFF,
+            };
+        } else {
+            return .{ 0, 0, 0, 0 };
+        }
+    }
+
+    fn sendMessage(self: Self, window: u32, atom: u32) void {
+        const requested_atom = self.requestAtom("WM_PROTOCOLS");
+        if (requested_atom) |atom_type| {
+            // const raw_data: [5]u32 = .{ atom, c.XCB_CURRENT_TIME, 0, 0, 0 };
+            const atom_bytes: [4]u8 = std.mem.toBytes(atom);
+            const time_bytes: [4]u8 = std.mem.toBytes(@as(u32, @intCast(c.XCB_CURRENT_TIME)));
+            var data: [20]u8 = [_]u8{0} ** 20;
+            data[0] = atom_bytes[0];
+            data[1] = atom_bytes[1];
+            data[2] = atom_bytes[2];
+            data[3] = atom_bytes[3];
+            data[4] = time_bytes[0];
+            data[5] = time_bytes[1];
+            data[6] = time_bytes[2];
+            data[7] = time_bytes[3];
+            // serialize32(atom, endian: (unknown type))
+
+            const event: struct { window: u32, sequence: u16, format: u8, response_type: u8, kind: u32, data: [20]u8 } = .{
+                .window = window,
+                .sequence = 0,
+                .format = 32,
+                .response_type = c.XCB_CLIENT_MESSAGE,
+                .kind = atom_type,
+                .data = data,
+            };
+
+            const message = std.mem.asBytes(&event);
+
+            // TODO: Don't ignore
+            _ = c.xcb_send_event(self.connection, 0, window, c.XCB_EVENT_MASK_NO_EVENT, message);
+        }
+    }
+
+    pub fn containsProtocol(self: Self, window: u32, atom: u32) bool {
+        const requested_atom = self.requestAtom("WM_PROTOCOLS");
+        if (requested_atom) |atom_type| {
+            const reply = self.getProperty(window, atom_type, c.XCB_ATOM_ATOM);
+
+            if (reply != null) {
+                if (reply.*.format == 32) {
+                    // reply.*.value_len
+                    var i: u32 = 0;
+                    while (i < reply.*.value_len and i < reply.*.pad0.len - 5) : (i += 4) {
+                        const buf: *const [4]u8 = reply.*.pad0[i..(i + 4)][0..4];
+                        const value = std.mem.readInt(u32, buf, .little);
+                        if (value == atom) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    pub fn destroy(self: Self, window: u32) void {
+        const requested_atom = self.requestAtom("WM_DELETE_WINDOW");
+        var force = true;
+        if (requested_atom) |atom| {
+            if (self.containsProtocol(window, atom)) {
+                self.sendMessage(window, atom);
+                force = false;
+            }
+        }
+
+        if (force) {
+            // TODO: Don't ignore
+            _ = c.xcb_destroy_window(self.connection, window);
         }
     }
 };
