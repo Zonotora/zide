@@ -318,13 +318,14 @@ pub const Connection = struct {
         }
         const window = event.*.event;
         const root = event.*.root;
-        _ = c.xcb_set_input_focus(self.connection, c.XCB_INPUT_FOCUS_POINTER_ROOT, window, c.XCB_CURRENT_TIME);
+
+        self.focus(window);
         std.debug.print("enter_notify event={} root={}\n", .{ window, root });
 
         return .{ .enter_notify = window };
     }
 
-    fn buttonPress(_: Self, event: [*c]c.xcb_button_press_event_t) ZideEvent {
+    fn buttonPress(self: Self, event: [*c]c.xcb_button_press_event_t) ZideEvent {
         if (event == null) {
             return .none;
         }
@@ -342,6 +343,8 @@ pub const Connection = struct {
             root_x,
             root_y,
         });
+
+        self.stackOnTop(window);
 
         return .{ .button_press = .{ .window = window, .x = x, .y = y, .root_x = root_x, .root_y = root_y } };
     }
@@ -430,18 +433,13 @@ pub const Connection = struct {
     }
 
     pub fn update(self: Self, windows: std.ArrayList(Window)) void {
-        for (windows.items, 0..) |window, index| {
+        for (windows.items) |window| {
             const configure_mask = c.XCB_CONFIG_WINDOW_X |
                 c.XCB_CONFIG_WINDOW_Y |
                 c.XCB_CONFIG_WINDOW_WIDTH |
                 c.XCB_CONFIG_WINDOW_HEIGHT;
 
-            // TODO: Remove
-            var rect = window.rect;
-            if (window.floating) {
-                rect.x += @intCast(rect.width * @as(u32, @intCast(index)));
-            }
-
+            const rect = window.rect;
             const values = [_]i32{ rect.x, rect.y, rect.width, rect.height };
 
             _ = c.xcb_configure_window(self.connection, window.window, configure_mask, &values);
@@ -450,8 +448,14 @@ pub const Connection = struct {
 
     pub fn focus(self: Self, window: u32) void {
         // TODO: Handle void cookie
-        const cookie = c.xcb_set_input_focus(self.connection, 1, window, c.XCB_CURRENT_TIME);
-        _ = cookie;
+        _ = c.xcb_set_input_focus(self.connection, c.XCB_INPUT_FOCUS_POINTER_ROOT, window, c.XCB_CURRENT_TIME);
+    }
+
+    pub fn stackOnTop(self: Self, window_id: u32) void {
+        const configure_mask = c.XCB_CONFIG_WINDOW_STACK_MODE;
+        const values = [_]u32{c.XCB_STACK_MODE_ABOVE};
+        // TODO: Handle void cookie
+        _ = c.xcb_configure_window(self.connection, window_id, configure_mask, &values);
     }
 
     fn requestAtom(self: Self, name: [*c]const u8) ?u32 {
